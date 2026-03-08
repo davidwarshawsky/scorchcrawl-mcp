@@ -75,7 +75,7 @@ See `.env.example` for all configurable variables.
         "command": "npx",
         "args": ["scorchcrawl-mcp"],
         "env": {
-          "SCORCHCRAWL_API_URL": "http://localhost:24786",
+          "SCORCHCRAWL_URL": "http://localhost:24787",
           "GITHUB_TOKEN": "ghp_exampletoken"
         }
       }
@@ -95,7 +95,7 @@ See `.env.example` for all configurable variables.
         "command": "node",
         "args": ["/path/to/scorchcrawl-mcp/client/dist/cli.js"],
         "env": {
-          "SCORCHCRAWL_API_URL": "http://localhost:24786",
+          "SCORCHCRAWL_URL": "http://localhost:24787",
           "GITHUB_TOKEN": "ghp_exampletoken"
         }
       }

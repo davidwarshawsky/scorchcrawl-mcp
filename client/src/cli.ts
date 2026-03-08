@@ -14,7 +14,8 @@
  *   SCORCHCRAWL_URL=https://your-server.com/mcp-api/scorchcrawl/YOUR_KEY scorchcrawl-mcp
  *
  * Environment variables:
- *   SCORCHCRAWL_URL          - Base URL of the ScorchCrawl MCP server (required)
+ *   SCORCHCRAWL_URL          - Base URL of the ScorchCrawl MCP server (preferred)
+ *   SCORCHCRAWL_API_URL      - Backward-compatible alias for SCORCHCRAWL_URL
  *   GITHUB_TOKEN             - GitHub PAT for Copilot SDK agent (optional, sent as x-copilot-token)
  *   SCORCHCRAWL_LOCAL_PROXY  - Set to "true" to route scraping through your local IP
  */
@@ -22,7 +23,10 @@
 import { config } from 'dotenv';
 config({ quiet: true });
 
-const SCORCHCRAWL_URL = process.env.SCORCHCRAWL_URL || 'http://localhost:24787';
+const SCORCHCRAWL_URL =
+  process.env.SCORCHCRAWL_URL ||
+  process.env.SCORCHCRAWL_API_URL ||
+  'http://localhost:24787';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const LOCAL_PROXY = process.env.SCORCHCRAWL_LOCAL_PROXY === 'true';
 
@@ -44,7 +48,8 @@ interface JsonRpcResponse {
  * Forward a JSON-RPC request to the remote ScorchCrawl server.
  */
 async function forwardToServer(request: JsonRpcRequest): Promise<JsonRpcResponse> {
-  const url = `${SCORCHCRAWL_URL.replace(/\/$/, '')}/mcp`;
+  const baseUrl = SCORCHCRAWL_URL.replace(/\/$/, '');
+  const url = baseUrl.endsWith('/mcp') ? baseUrl : `${baseUrl}/mcp`;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
