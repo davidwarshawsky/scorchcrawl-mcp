@@ -123,9 +123,10 @@ See the companion `scorchcrawl` repository:
 
 ## Publishing to npm
 
-The CLI client (`client/package.json`) is published to npm as `scorchcrawl-mcp`:
+The npm package `scorchcrawl-mcp` is published from `server/package.json`.
 
 ```bash
+cd server
 npm publish
 ```
 

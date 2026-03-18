@@ -132,10 +132,6 @@ describe('MCP tools/list', () => {
     expect(toolNames).toContain('scorch_search');
     expect(toolNames).toContain('scorch_crawl');
     expect(toolNames).toContain('scorch_extract');
-    expect(toolNames).toContain('scorch_agent');
-    expect(toolNames).toContain('scorch_agent_status');
-    expect(toolNames).toContain('scorch_agent_models');
-    expect(toolNames).toContain('scorch_agent_rate_limit_status');
     expect(toolNames).toContain('scorch_check_crawl_status');
   });
 

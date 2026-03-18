@@ -5,17 +5,7 @@ import { z } from 'zod';
 import ScorchClient from './lib/scorch-client/index.js';
 import type { IncomingHttpHeaders } from 'http';
 import { localScrape, isLocalProxyEnabled, getCleanApiUrl, type LocalScrapeResult } from './local-scraper.js';
-import {
-  buildAgentConfig,
-  startAgent,
-  getAgentStatus,
-  shutdownAgent,
-  parseAllowedModels,
-  getDefaultModel,
-  getRateLimitStats,
-  getCopilotClient,
-  type AgentConfig,
-} from './copilot-agent.js';
+import { getCopilotClient } from './copilot-client.js';
 import {
   mapError,
   safeExecute,
@@ -336,7 +326,7 @@ If JSON extraction returns empty, minimal, or just navigation content, the page 
 2. **Try a different URL:** If the URL has a hash fragment (#section), try the base URL or look for a direct page URL
 3. **Use scorch_map to find the correct page:** Large documentation sites or SPAs often spread content across multiple URLs. Use \`scorch_map\` with a \`search\` parameter to discover the specific page containing your target content, then scrape that URL directly.
    Example: If scraping "https://docs.example.com/reference" fails to find webhook parameters, use \`scorch_map\` with \`{"url": "https://docs.example.com/reference", "search": "webhook"}\` to find URLs like "/reference/webhook-events", then scrape that specific page.
-4. **Use scorch_agent:** As a last resort for heavily dynamic pages where map+scrape still fails, use the agent which can autonomously navigate and research
+4. **Escalate manually:** If map+scrape still fails, inspect the rendered page yourself and decide whether a custom context-cutter or page-specific flow is warranted
 
 **Usage Example (JSON format - REQUIRED for specific data extraction):**
 \`\`\`json
@@ -492,9 +482,9 @@ Map a website to discover all indexed URLs on the site.
 
 **Best for:** Discovering URLs on a website before deciding what to scrape; finding specific sections or pages within a large site; locating the correct page when scrape returns empty or incomplete results.
 **Not recommended for:** When you already know which specific URL you need (use scrape); when you need the content of the pages (use scrape after mapping).
-**Common mistakes:** Using crawl to discover URLs instead of map; jumping straight to scorch_agent when scrape fails instead of using map first to find the right page.
+**Common mistakes:** Using crawl to discover URLs instead of map; giving up on map too early when scrape fails to find the right page.
 
-**IMPORTANT - Use map before agent:** If \`scorch_scrape\` returns empty, minimal, or irrelevant content, use \`scorch_map\` with the \`search\` parameter to find the specific page URL containing your target content. This is faster and cheaper than using \`scorch_agent\`. Only use the agent as a last resort after map+scrape fails.
+**IMPORTANT - Use map before custom handling:** If \`scorch_scrape\` returns empty, minimal, or irrelevant content, use \`scorch_map\` with the \`search\` parameter to find the specific page URL containing your target content before building any page-specific handling.
 
 **Prompt Example:** "Find the webhook documentation page on this API docs site."
 **Usage Example (discover all URLs):**
@@ -824,255 +814,6 @@ Extract structured information from web pages using LLM capabilities. Supports b
       return await processResponse(res, { skipSummarization: true });
     }, { tool: 'scorch_extract' });
   },
-});
-
-// ---------------------------------------------------------------------------
-// Copilot SDK Agent Configuration
-// ---------------------------------------------------------------------------
-const agentConfig: AgentConfig = buildAgentConfig();
-const allowedModelsList = agentConfig.allowedModels.join(', ');
-
-server.addTool({
-  name: 'scorch_agent',
-  description: `
-Autonomous web research agent powered by GitHub Copilot SDK. This is a separate AI agent layer that independently browses the internet, searches for information, navigates through pages, and extracts structured data based on your query. You describe what you need, and the agent figures out where to find it.
-
-**How it works:** The agent uses GitHub Copilot SDK to orchestrate web research using scorchcrawl tools (scrape, search, map, extract). It runs **asynchronously** - it returns a job ID immediately, and you poll \`scorch_agent_status\` to check when complete and retrieve results.
-
-**Available models:** ${allowedModelsList}
-
-**IMPORTANT - Async workflow with patient polling:**
-1. Call \`scorch_agent\` with your prompt/schema → returns job ID immediately
-2. Poll \`scorch_agent_status\` with the job ID to check progress
-3. **Keep polling for at least 2-3 minutes** - agent research typically takes 1-5 minutes for complex queries
-4. Poll every 15-30 seconds until status is "completed" or "failed"
-5. Do NOT give up after just a few polling attempts - the agent needs time to research
-
-**Expected wait times:**
-- Simple queries with provided URLs: 30 seconds - 1 minute
-- Complex research across multiple sites: 2-5 minutes
-- Deep research tasks: 5+ minutes
-
-**Best for:** Complex research tasks where you don't know the exact URLs; multi-source data gathering; finding information scattered across the web; extracting data from JavaScript-heavy SPAs that fail with regular scrape.
-**Not recommended for:** Simple single-page scraping where you know the URL (use scrape with JSON format instead - faster and cheaper).
-
-**Arguments:**
-- prompt: Natural language description of the data you want (required, max 10,000 characters)
-- urls: Optional array of URLs to focus the agent on specific pages
-- schema: Optional JSON schema for structured output
-- model: Optional model override (must be one of: ${allowedModelsList})
-
-**Prompt Example:** "Find the founders of ScorchCrawl and their backgrounds"
-**Usage Example (start agent, then poll patiently for results):**
-\`\`\`json
-{
-  "name": "scorch_agent",
-  "arguments": {
-    "prompt": "Find the top 5 AI startups founded in 2024 and their funding amounts",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "startups": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "name": { "type": "string" },
-              "funding": { "type": "string" },
-              "founded": { "type": "string" }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-\`\`\`
-Then poll with \`scorch_agent_status\` every 15-30 seconds for at least 2-3 minutes.
-
-**Usage Example (with URLs - agent focuses on specific pages):**
-\`\`\`json
-{
-  "name": "scorch_agent",
-  "arguments": {
-    "urls": ["https://docs.example.com", "https://example.com/pricing"],
-    "prompt": "Compare the features and pricing information from these pages"
-  }
-}
-\`\`\`
-**Returns:** Job ID for status checking. Use \`scorch_agent_status\` to poll for results.
-`,
-  parameters: z.object({
-    prompt: z.string().min(1).max(10000),
-    urls: z.array(z.string().url()).optional(),
-    schema: z.record(z.string(), z.any()).optional(),
-    model: z.string().optional(),
-  }),
-  execute: async (
-    args: unknown,
-    { session, log }: { session?: SessionData; log: Logger }
-  ): Promise<string> => {
-    const client = getClient(session);
-    const a = args as Record<string, unknown>;
-
-    // Validate model if provided
-    const requestedModel = a.model as string | undefined;
-    if (requestedModel && !agentConfig.allowedModels.includes(requestedModel)) {
-      return asText({
-        success: false,
-        error: `Model "${requestedModel}" is not allowed. Available models: ${allowedModelsList}`,
-      });
-    }
-
-    log.info('Starting Copilot SDK agent', {
-      prompt: (a.prompt as string).substring(0, 100),
-      urlCount: Array.isArray(a.urls) ? a.urls.length : 0,
-      model: requestedModel || agentConfig.defaultModel,
-    });
-
-    try {
-      const result = await startAgent(
-        {
-          prompt: a.prompt as string,
-          urls: a.urls as string[] | undefined,
-          schema: (a.schema as Record<string, unknown>) || undefined,
-          model: requestedModel,
-        },
-        client,
-        ORIGIN,
-        agentConfig,
-        session?.copilotToken
-      );
-
-      // Surface rate-limit rejections with clear messaging
-      if (result.rateLimited) {
-        return asText({
-          success: false,
-          rateLimited: true,
-          error: result.error,
-          retryAfterSeconds: result.retryAfterSeconds,
-          hint: 'Wait for the specified duration and retry, or check scorch_agent_rate_limit_status for current limits.',
-        });
-      }
-
-      return asText(result);
-    } catch (err: any) {
-      log.error('Failed to start agent', { error: err.message });
-      return asText({
-        success: false,
-        error: `Failed to start agent: ${err.message || err}`,
-      });
-    }
-  },
-});
-
-server.addTool({
-  name: 'scorch_agent_status',
-  description: `
-Check the status of an agent job and retrieve results when complete. Use this to poll for results after starting an agent with \`scorch_agent\`.
-
-**IMPORTANT - Be patient with polling:**
-- Poll every 15-30 seconds
-- **Keep polling for at least 2-3 minutes** before considering the request failed
-- Complex research can take 5+ minutes - do not give up early
-- Only stop polling when status is "completed" or "failed"
-
-**Usage Example:**
-\`\`\`json
-{
-  "name": "scorch_agent_status",
-  "arguments": {
-    "id": "550e8400-e29b-41d4-a716-446655440000"
-  }
-}
-\`\`\`
-**Possible statuses:**
-- processing: Agent is still researching - keep polling, do not give up
-- completed: Research finished - response includes the extracted data
-- failed: An error occurred (only stop polling on this status)
-
-**Returns:** Status, progress, and results (if completed) of the agent job.
-`,
-  parameters: z.object({ id: z.string() }),
-  execute: async (
-    args: unknown,
-    { log }: { session?: SessionData; log: Logger }
-  ): Promise<string> => {
-    const { id } = args as { id: string };
-    log.info('Checking Copilot agent status', { id });
-
-    const job = getAgentStatus(id);
-    if (!job) {
-      return asText({
-        success: false,
-        error: `Agent job "${id}" not found`,
-      });
-    }
-
-    return asText({
-      success: true,
-      status: job.status,
-      progress: job.progress || undefined,
-      data: job.result || undefined,
-      error: job.error || undefined,
-      duration: job.completedAt
-        ? `${((job.completedAt - job.createdAt) / 1000).toFixed(1)}s`
-        : undefined,
-    });
-  },
-});
-
-// ---------------------------------------------------------------------------
-// Agent Model Listing Tool
-// ---------------------------------------------------------------------------
-server.addTool({
-  name: 'scorch_agent_models',
-  description: `
-List the available models for the Copilot SDK agent. These models are configured via the COPILOT_AGENT_MODELS environment variable.
-
-**Returns:** List of allowed models and the current default model.
-`,
-  parameters: z.object({}),
-  execute: async (): Promise<string> => {
-    return asText({
-      allowedModels: parseAllowedModels(),
-      defaultModel: getDefaultModel(),
-    });
-  },
-});
-
-// ---------------------------------------------------------------------------
-// Rate Limit Status Tool (observability)
-// ---------------------------------------------------------------------------
-server.addTool({
-  name: 'scorch_agent_rate_limit_status',
-  description: `
-Check the current rate limiting status for the Copilot SDK agent. Returns concurrency usage, request counts, and configuration.
-
-Useful for:
-- Monitoring server capacity before starting new agent jobs
-- Debugging rate-limit rejections
-- Understanding current load
-
-**Returns:** Current concurrency stats, rate limit configuration, and quota info.
-`,
-  parameters: z.object({}),
-  execute: async (): Promise<string> => {
-    return asText({
-      success: true,
-      ...getRateLimitStats(),
-    });
-  },
-});
-
-// Graceful shutdown for Copilot agent
-process.on('SIGINT', async () => {
-  await shutdownAgent();
-  process.exit(0);
-});
-process.on('SIGTERM', async () => {
-  await shutdownAgent();
-  process.exit(0);
 });
 
 const PORT = Number(process.env.PORT || 3000);

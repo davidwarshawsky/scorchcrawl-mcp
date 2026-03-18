@@ -1,6 +1,6 @@
 {
   "name": "scorchcrawl-mcp",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "description": "MCP client for ScorchCrawl — connect Copilot to a self-hosted stealth web scraping server",
   "type": "module",
   "bin": {

@@ -3,10 +3,11 @@ name: scorchcrawl-mcp
 # =============================================================================
 # ScorchCrawl-MCP — Full-stack deployment (MCP server + core engine)
 #
-# Deploy with: docker compose up -d
+# Deploy engine only with: docker compose up -d
+# Deploy engine + MCP for testing with: docker compose --profile mcp up -d
 #
 # Services:
-#   - scorchcrawl-mcp:  MCP server (Copilot SDK agent + tool registry)
+#   - scorchcrawl-mcp:  MCP server for test-only / opt-in MCP access
 #   - scorchcrawl-api:  Scraping engine (pulled from Docker Hub)
 #   - searxng:          Privacy-preserving metasearch (default search provider)
 #   - playwright:       Stealth browser service
@@ -68,6 +69,7 @@ services:
   # ScorchCrawl MCP Server (the entry point for Copilot / MCP clients)
   # ===========================================================================
   scorchcrawl-mcp:
+    profiles: ["mcp"]
     build:
       context: ./server
       dockerfile: Dockerfile

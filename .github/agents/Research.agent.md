@@ -37,7 +37,6 @@ Select the right tool for the specific domain. Do not default to generic search.
 | **Read a Specific URL** | `scorchcrawl/scorch_scrape` | `scorchcrawl/scorch_extract` | Scrape renders the page to markdown; Extract pulls structured data. |
 | **Deep Site Crawl** | `scorchcrawl/scorch_crawl` | `scorchcrawl/scorch_map` | Crawl traverses links recursively; Map discovers all URLs on a domain. |
 | **Structured Data Extraction** | `scorchcrawl/scorch_extract` | `mcp_local_tools/extract_tables` | Extract with a schema for JSON output; extract_tables for local files. |
-| **Autonomous Research** | `scorchcrawl/scorch_agent` | `scorchcrawl/scorch_search` | Agent performs multi-step research with its own planning loop. |
 | **AWS Cloud Services** | `aws-mcp/read_documentation` | `aws-mcp/search_documentation` | AWS MCP is the source of truth for all AWS questions. |
 | **Repository Intelligence** | `github-explorer/search_code` | `github-explorer/get_file_contents` | Search code across repos; read specific files for deep understanding. |
 | **Issues & PRs** | `github-explorer/search_issues` | `github-explorer/pull_request_read` | Search and read issues/PRs for project context and decisions. |
@@ -138,24 +137,6 @@ ScorchCrawl is your **only** search engine. All web research flows through it.
   - `enableWebSearch` (optional): Allow the extractor to search the web.
   - `scrapeOptions` (optional): Same options as `scorch_scrape`.
 - **When to use:** Pulling structured data (prices, specs, tables, metadata) from web pages.
-
-#### `scorch_agent` — Autonomous Research Agent
-
-- **Purpose:** Deploys an autonomous agent that plans and executes multi-step research.
-- **Parameters:**
-  - `url` (required): Starting URL for the research.
-  - `prompt` (required): The research question or objective.
-  - `maxSteps` (optional, default 10): Max research steps the agent will take.
-  - `model` (optional): LLM model to use for the agent.
-  - `systemPrompt` (optional): System-level context for the agent.
-  - `allowExternalLinks` (optional): Allow the agent to leave the starting domain.
-  - `schema` (optional): JSON schema for structured output.
-  - `scrapeOptions` (optional): Same options as `scorch_scrape`.
-- **When to use:** Complex research tasks that require multiple searches, page reads, and synthesis. Offload heavy research to the agent.
-- **Supporting tools:**
-  - `scorch_agent_status`: Check status of a running agent job.
-  - `scorch_agent_models`: List available LLM models for the agent.
-  - `scorch_agent_rate_limit_status`: Check current rate limits.
 
 ---
 

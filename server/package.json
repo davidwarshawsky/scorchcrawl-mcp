@@ -1,6 +1,6 @@
 {
   "name": "scorchcrawl-mcp",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "description": "Open-source Copilot SDK-compliant MCP server for web scraping with stealth bot-detection bypass.",
   "type": "module",
   "bin": {
