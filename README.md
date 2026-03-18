@@ -1,26 +1,27 @@
 # ScorchCrawl-MCP — MCP Proxy / Server
 
-This repository contains the MCP proxy/server that exposes Model Context Protocol endpoints and bridges MCP clients (VS Code Copilot, Claude Desktop, other clients) to the core `scorchcrawl` scraping engine, plus a CLI client for invoking the server.
+This repository contains the MCP proxy/server that exposes Model Context Protocol endpoints and bridges MCP clients (VS Code Copilot, Claude Desktop, other clients) to the core `scorchcrawl` scraping engine, plus a CLI client for invoking an already-running MCP HTTP endpoint.
 
 ## Design goals
 
 - Small, dependency-light server that can run as a local client-side proxy (`stdio`) or a remote HTTP MCP endpoint (`SSE`).
 - Keep per-user secrets (GitHub tokens, NODE_EXTRA_CA_CERTS) local when running `stdio`.
 - Use `SCORCHCRAWL_API_URL` to talk to the core scraping engine (can be local or remote).
-- Easy-to-install CLI client via npm (`npx scorchcrawl-mcp`).
+- Easy-to-install CLI client via npm (`npx scorchcrawl-mcp`) once the MCP server is already reachable over HTTP.
 
-## Quick start — CLI via npm (recommended)
+## Quick start — CLI via npm
 
-The simplest way to run the MCP server locally is:
+The npm package is a stdio wrapper around an MCP HTTP server. Start the MCP server first, then point the npm client at it:
 
 ```bash
-# Install and run as stdio server (default mode)
-npx scorchcrawl-mcp
-
-# Or set environment variables for HTTP server mode
+# Terminal 1: run the MCP server itself
 SCORCHCRAWL_API_URL=http://localhost:24786 \
 HTTP_STREAMABLE_SERVER=true PORT=24787 \
-npx scorchcrawl-mcp
+  node server/dist/index.js
+
+# Terminal 2: expose that HTTP MCP server over stdio for your editor/client
+SCORCHCRAWL_URL=http://localhost:24787 \
+  npx scorchcrawl-mcp
 ```
 
 ## Quick start — Local HTTP (SSE) server
@@ -61,6 +62,7 @@ See `.env.example` for all configurable variables.
 | `HTTP_STREAMABLE_SERVER` | `false` | Set to `true` to run as HTTP server instead of stdio |
 | `PORT` | `3000` | Server port |
 | `NODE_EXTRA_CA_CERTS` | — | Optional: CA bundle path for TLS validation (Windows clients) |
+| `SCORCHCRAWL_URL` | `http://localhost:24787` | npm client only: URL of the MCP HTTP server |
 
 ## Client configuration
 
@@ -75,7 +77,7 @@ See `.env.example` for all configurable variables.
         "command": "npx",
         "args": ["scorchcrawl-mcp"],
         "env": {
-          "SCORCHCRAWL_API_URL": "http://localhost:24786",
+          "SCORCHCRAWL_URL": "http://localhost:24787",
           "GITHUB_TOKEN": "ghp_exampletoken"
         }
       }
@@ -83,6 +85,28 @@ See `.env.example` for all configurable variables.
   }
 }
 ```
+
+### Ubuntu / WSL stdio example
+
+```json
+{
+  "scorchcrawl": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "scorchcrawl-mcp"],
+    "env": {
+      "SCORCHCRAWL_LOCAL_PROXY": "false",
+      "SCORCHCRAWL_API_KEY": "${env:SCORCHCRAWL_API_KEY}",
+      "SCORCHCRAWL_URL": "http://127.0.0.1:24787",
+      "SCORCHCRAWL_API_URL": "${env:SCORCHCRAWL_API_URL}",
+      "NODE_EXTRA_CA_CERTS": "/mnt/c/Users/320295634/MCP Configuration/combined-certs.pem"
+    },
+    "startupTimeout": 300000
+  }
+}
+```
+
+`SCORCHCRAWL_URL` is what the npm client uses to reach the MCP server. `SCORCHCRAWL_API_URL` still belongs to the MCP server process itself, which then talks to the scraping engine.
 
 ### Using local source
 
@@ -95,7 +119,7 @@ See `.env.example` for all configurable variables.
         "command": "node",
         "args": ["/path/to/scorchcrawl-mcp/client/dist/cli.js"],
         "env": {
-          "SCORCHCRAWL_API_URL": "http://localhost:24786",
+          "SCORCHCRAWL_URL": "http://localhost:24787",
           "GITHUB_TOKEN": "ghp_exampletoken"
         }
       }
@@ -109,10 +133,54 @@ See `.env.example` for all configurable variables.
 ```bash
 # Test the health endpoint (server running with HTTP mode)
 HTTP_STREAMABLE_SERVER=true PORT=24787 SCORCHCRAWL_API_URL=http://localhost:24786 \
-  npx scorchcrawl-mcp &
+  node server/dist/index.js &
 sleep 2
 curl -sf http://localhost:24787/health && echo "✓ MCP server is healthy"
 ```
+
+### Windows / WSL helper
+
+When you run the MCP server locally from Windows/WSL it is helpful to keep the scraping traffic and TLS trust bundle on the client machine. Set `SCORCHCRAWL_LOCAL_PROXY=true`, point the MCP server's `SCORCHCRAWL_API_URL` at `http://localhost:24786`, and overlay your Windows CA bundle before launching the server:
+
+```
+export SCORCHCRAWL_LOCAL_PROXY=true
+export SCORCHCRAWL_API_URL=http://localhost:24786
+export NODE_EXTRA_CA_CERTS="/mnt/c/Users/320295634/MCP Configuration/combined-certs.pem"
+```
+
+Then point the npm client at the MCP server:
+
+```
+export SCORCHCRAWL_URL=http://localhost:24787
+npx scorchcrawl-mcp
+```
+
+Replace `320295634` with your actual Windows profile path so Node trusts the same CA certificates as the host. The helper script at `./ScorchCrawl/scripts/dev-helper.sh` (relative to the workspace root one level above this README) copies missing `.env` files from the `.env.example`, prints this recommended environment (including a snapshot of `free -h` output so you can see how much RAM is free), and can run whichever unit tests you need once dependencies are installed:
+
+```
+./ScorchCrawl/scripts/dev-helper.sh env
+./ScorchCrawl/scripts/dev-helper.sh test-mcp
+./ScorchCrawl/scripts/dev-helper.sh test-engine
+./ScorchCrawl/scripts/dev-helper.sh test-all
+```
+
+The npm client now also has dedicated test layers:
+
+```bash
+cd client
+npm run test:unit
+npm run test:integration
+npm run test:e2e
+```
+
+There is also a lightweight smoke call that mimics your Windows `npx` config on Ubuntu:
+
+```bash
+cd client
+npm run smoke
+```
+
+Keep an eye on RAM before launching the Docker stack — the Compose files currently cap `scorchcrawl-api` at 8 GB and the browser services at 4 GB each, so reduce the `mem_limit` slices if your host has less than ~16 GB.
 
 ## Getting the core scraping engine
 

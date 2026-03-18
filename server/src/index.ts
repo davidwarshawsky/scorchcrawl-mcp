@@ -1075,32 +1075,41 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-const PORT = Number(process.env.PORT || 3000);
-const HOST =
-  process.env.CLOUD_SERVICE === 'true'
-    ? '0.0.0.0'
-    : process.env.HOST || 'localhost';
-type StartArgs = Parameters<typeof server.start>[0];
-let args: StartArgs;
+export { server };
 
-if (
-  process.env.CLOUD_SERVICE === 'true' ||
-  process.env.SSE_LOCAL === 'true' ||
-  process.env.HTTP_STREAMABLE_SERVER === 'true'
-) {
-  args = {
-    transportType: 'httpStream',
-    httpStream: {
-      port: PORT,
-      host: HOST,
-      stateless: true,
-    },
-  };
-} else {
-  // default: stdio
-  args = {
-    transportType: 'stdio',
-  };
+// --- Startup logic ---
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const PORT =
+    Number(process.env.PORT) ||
+    Number(process.env.SCORCHCRAWL_PORT) ||
+    24787;
+  const HOST =
+    process.env.CLOUD_SERVICE === 'true'
+      ? '0.0.0.0'
+      : process.env.HOST || 'localhost';
+
+  type StartArgs = Parameters<typeof server.start>[0];
+  let args: StartArgs;
+
+  if (
+    process.env.CLOUD_SERVICE === 'true' ||
+    process.env.SSE_LOCAL === 'true' ||
+    process.env.HTTP_STREAMABLE_SERVER === 'true'
+  ) {
+    args = {
+      transportType: 'httpStream',
+      httpStream: {
+        port: PORT,
+        host: HOST,
+        stateless: true,
+      },
+    };
+  } else {
+    // default: stdio
+    args = {
+      transportType: 'stdio',
+    };
+  }
+
+  await server.start(args);
 }
-
-await server.start(args);
