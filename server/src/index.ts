@@ -5,7 +5,6 @@ import { z } from 'zod';
 import ScorchClient from './lib/scorch-client/index.js';
 import type { IncomingHttpHeaders } from 'http';
 import { localScrape, isLocalProxyEnabled, getCleanApiUrl, type LocalScrapeResult } from './local-scraper.js';
-import { getCopilotClient } from './copilot-client.js';
 import {
   mapError,
   safeExecute,
@@ -18,8 +17,6 @@ dotenv.config({ debug: false, quiet: true });
 
 interface SessionData {
   scraperApiKey?: string;
-  /** Per-user GitHub / Copilot token for agent authentication */
-  copilotToken?: string;
   [key: string]: unknown;
 }
 
@@ -42,22 +39,7 @@ function extractApiKey(headers: IncomingHttpHeaders): string | undefined {
   return undefined;
 }
 
-/**
- * Extract a GitHub / Copilot token from request headers.
- * Clients set one of:
- *   x-copilot-token: <token>
- *   x-github-token:  <token>
- * If neither header is present the server-wide env var
- * GITHUB_TOKEN is used as a fallback.
- */
-function extractCopilotToken(headers: IncomingHttpHeaders): string | undefined {
-  const copilotHeader = (headers['x-copilot-token'] ||
-    headers['x-github-token']) as string | string[] | undefined;
-  if (copilotHeader) {
-    return Array.isArray(copilotHeader) ? copilotHeader[0] : copilotHeader;
-  }
-  return process.env.GITHUB_TOKEN || undefined;
-}
+
 
 function removeEmptyTopLevel<T extends Record<string, any>>(
   obj: T
@@ -120,16 +102,13 @@ const server = new FastMCP<SessionData>({
   authenticate: async (request: {
     headers: IncomingHttpHeaders;
   }): Promise<SessionData> => {
-    // Extract per-user Copilot token (falls back to env var)
-    const copilotToken = extractCopilotToken(request.headers);
-
     if (process.env.CLOUD_SERVICE === 'true') {
       const apiKey = extractApiKey(request.headers);
 
       if (!apiKey) {
         throw new Error('API key is required');
       }
-      return { scraperApiKey: apiKey, copilotToken };
+      return { scraperApiKey: apiKey };
     } else {
       // For self-hosted instances, API key is optional if SCORCHCRAWL_API_URL is provided
       if (!process.env.SCORCHCRAWL_API_KEY && !process.env.SCORCHCRAWL_API_URL) {
@@ -138,7 +117,7 @@ const server = new FastMCP<SessionData>({
         );
         process.exit(1);
       }
-      return { scraperApiKey: process.env.SCORCHCRAWL_API_KEY, copilotToken };
+      return { scraperApiKey: process.env.SCORCHCRAWL_API_KEY };
     }
   },
   // Lightweight health endpoint for LB checks
@@ -415,8 +394,6 @@ ${
           } as any);
           return await processResponse(res, {
             url: String(url),
-            getCopilotClientFn: getCopilotClient,
-            copilotToken: session?.copilotToken,
           });
         }
 
@@ -436,8 +413,6 @@ ${
           } as any);
           return await processResponse(res, {
             url: String(url),
-            getCopilotClientFn: getCopilotClient,
-            copilotToken: session?.copilotToken,
           });
         }
 
@@ -454,8 +429,6 @@ ${
 
         return await processResponse(localResult, {
           url: String(url),
-          getCopilotClientFn: getCopilotClient,
-          copilotToken: session?.copilotToken,
         });
       }
 
@@ -468,8 +441,6 @@ ${
       } as any);
       return await processResponse(res, {
         url: String(url),
-        getCopilotClientFn: getCopilotClient,
-        copilotToken: session?.copilotToken,
       });
     }, { tool: 'scorch_scrape', url: String(url) });
   },

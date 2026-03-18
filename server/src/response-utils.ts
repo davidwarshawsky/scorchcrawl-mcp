@@ -1,16 +1,13 @@
 /**
  * Response Processing Utilities
  *
- * Three layers of intelligent response handling for MCP tool results:
+ * Two layers of intelligent response handling for MCP tool results:
  *   1. Error Mapping — classifies errors and returns actionable guidance
  *   2. Content Truncation — smart paragraph-boundary truncation with notices
- *   3. AI Summarization — Copilot SDK-powered content compression (optional)
  *
  * No competitor MCP scraper implements any of these. This is a ScorchCrawl
  * differentiator.
  */
-
-import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Configuration (from environment)
@@ -18,29 +15,6 @@ import { createHash } from 'node:crypto';
 
 const MAX_CONTENT_CHARS = parseInt(
   process.env.SCORCHCRAWL_MAX_CONTENT_CHARS || '25000',
-  10,
-);
-
-const SUMMARIZE_AFTER_WORDS = parseInt(
-  process.env.SCORCHCRAWL_SUMMARIZE_AFTER_WORDS || '5000',
-  10,
-);
-
-const SUMMARIZE_MODEL =
-  process.env.SCORCHCRAWL_SUMMARIZE_MODEL || 'gpt-4o';
-
-const SUMMARIZE_CACHE_SIZE = parseInt(
-  process.env.SCORCHCRAWL_SUMMARIZE_CACHE_SIZE || '100',
-  10,
-);
-
-const SUMMARIZE_MAX_PER_MINUTE = parseInt(
-  process.env.SCORCHCRAWL_SUMMARIZE_MAX_PER_MINUTE || '10',
-  10,
-);
-
-const SUMMARIZE_TIMEOUT_MS = parseInt(
-  process.env.SCORCHCRAWL_SUMMARIZE_TIMEOUT_MS || '300000',
   10,
 );
 
@@ -417,229 +391,6 @@ function buildTruncationNotice(shownChars: number, originalChars: number): strin
 }
 
 // ---------------------------------------------------------------------------
-// Feature 3: AI Summarization
-// ---------------------------------------------------------------------------
-
-/**
- * LRU cache for summarization results.
- * Key: sha256(url + first 1000 chars of markdown)
- * Value: { summary, timestamp }
- */
-const summaryCache = new Map<string, { summary: string; timestamp: number; wordCount: number }>();
-const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
-
-/** Sliding window for summarization rate limiting */
-const summarizationTimestamps: number[] = [];
-
-/** Word count helper */
-export function wordCount(text: string): number {
-  return text.split(/\s+/).filter(Boolean).length;
-}
-
-/** Generate a cache key for summarization */
-function summaryKey(url: string, markdown: string): string {
-  const fingerprint = url + markdown.slice(0, 1000);
-  return createHash('sha256').update(fingerprint).digest('hex');
-}
-
-/** Check if we can make another summarization call (rate limit) */
-function canSummarize(): boolean {
-  if (SUMMARIZE_MAX_PER_MINUTE <= 0) return false;
-  const now = Date.now();
-  const windowStart = now - 60_000;
-
-  // Purge old entries
-  while (summarizationTimestamps.length > 0 && summarizationTimestamps[0] < windowStart) {
-    summarizationTimestamps.shift();
-  }
-
-  return summarizationTimestamps.length < SUMMARIZE_MAX_PER_MINUTE;
-}
-
-/** Record a summarization call for rate limiting */
-function recordSummarization(): void {
-  summarizationTimestamps.push(Date.now());
-}
-
-/** Evict oldest entries if cache exceeds max size */
-function evictCache(): void {
-  if (summaryCache.size <= SUMMARIZE_CACHE_SIZE) return;
-
-  // Find and delete the oldest entries
-  const entries = [...summaryCache.entries()].sort(
-    (a, b) => a[1].timestamp - b[1].timestamp,
-  );
-  const toDelete = entries.slice(0, entries.length - SUMMARIZE_CACHE_SIZE);
-  for (const [key] of toDelete) {
-    summaryCache.delete(key);
-  }
-}
-
-/**
- * Summarize markdown content using the Copilot SDK if available.
- * Falls back to truncation on failure or when no LLM is available.
- *
- * @param markdown - The full markdown content to potentially summarize
- * @param url - Source URL (used for cache key)
- * @param getCopilotClientFn - Function to get a CopilotClient instance
- * @param copilotToken - Optional per-user Copilot token
- * @returns Processed markdown with summarization metadata
- */
-export async function summarizeIfNeeded(
-  markdown: string,
-  url: string,
-  getCopilotClientFn?: (token?: string) => Promise<any>,
-  copilotToken?: string,
-): Promise<{
-  markdown: string;
-  summarized: boolean;
-  meta?: Record<string, unknown>;
-}> {
-  // Check if summarization is disabled
-  if (SUMMARIZE_AFTER_WORDS <= 0) {
-    return { markdown, summarized: false };
-  }
-
-  const words = wordCount(markdown);
-  if (words <= SUMMARIZE_AFTER_WORDS) {
-    return { markdown, summarized: false };
-  }
-
-  // Check cache
-  const key = summaryKey(url, markdown);
-  const cached = summaryCache.get(key);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    return {
-      markdown: cached.summary,
-      summarized: true,
-      meta: {
-        _summarized: true,
-        _originalWordCount: words,
-        _summaryWordCount: cached.wordCount,
-        _summarizedBy: SUMMARIZE_MODEL,
-        _cachedResult: true,
-      },
-    };
-  }
-
-  // Check if Copilot client is available
-  if (!getCopilotClientFn) {
-    return { markdown, summarized: false };
-  }
-
-  // Check rate limit
-  if (!canSummarize()) {
-    return { markdown, summarized: false };
-  }
-
-  try {
-    const client = await getCopilotClientFn(copilotToken);
-    if (!client) {
-      return { markdown, summarized: false };
-    }
-
-    const targetWords = Math.min(SUMMARIZE_AFTER_WORDS, Math.floor(words * 0.3));
-
-    const sessionConfig: Record<string, unknown> = {
-      model: SUMMARIZE_MODEL,
-      systemMessage: {
-        mode: 'replace',
-        content: buildSummarizationPrompt(words, targetWords),
-      },
-    };
-
-    const session = await client.createSession(sessionConfig);
-    recordSummarization();
-
-    try {
-      const response = await session.sendAndWait({ prompt: markdown }, SUMMARIZE_TIMEOUT_MS);
-
-      // Extract content from response — handle multiple possible shapes
-      let summary: string = '';
-      if (response && typeof response === 'object') {
-        const r = response as Record<string, unknown>;
-        // Shape 1: { data: { content: "..." } } (most common)
-        if (r.data && typeof r.data === 'object') {
-          const d = r.data as Record<string, unknown>;
-          if (typeof d.content === 'string') summary = d.content;
-          else if (typeof d.text === 'string') summary = d.text;
-        }
-        // Shape 2: { content: "..." }
-        if (!summary && typeof r.content === 'string') summary = r.content;
-        // Shape 3: { text: "..." }
-        if (!summary && typeof r.text === 'string') summary = r.text;
-        // Shape 4: { message: { content: "..." } }
-        if (!summary && r.message && typeof r.message === 'object') {
-          const m = r.message as Record<string, unknown>;
-          if (typeof m.content === 'string') summary = m.content;
-        }
-      } else if (typeof response === 'string') {
-        summary = response;
-      }
-
-      if (!summary || summary.length < 50) {
-        // Summarization returned garbage — fall back
-        console.error(`[Summarization] Response too short or empty (${summary.length} chars), response keys: ${response ? Object.keys(response as object).join(', ') : 'null'}`);
-        return { markdown, summarized: false };
-      }
-
-      const summaryWords = wordCount(summary);
-
-      // Cache the result
-      summaryCache.set(key, {
-        summary,
-        timestamp: Date.now(),
-        wordCount: summaryWords,
-      });
-      evictCache();
-
-      return {
-        markdown: summary,
-        summarized: true,
-        meta: {
-          _summarized: true,
-          _originalWordCount: words,
-          _summaryWordCount: summaryWords,
-          _summarizedBy: SUMMARIZE_MODEL,
-        },
-      };
-    } finally {
-      try { await session.destroy(); } catch { /* ignore cleanup */ }
-    }
-  } catch (err) {
-    // Summarization failed — fall back silently but log for debugging
-    const errMsg = err instanceof Error ? err.message : String(err);
-    const errStack = err instanceof Error ? err.stack : '';
-    console.error(`[Summarization] Failed for ${url}: ${errMsg}`);
-    if (errStack) console.error(`[Summarization] Stack: ${errStack}`);
-    return {
-      markdown,
-      summarized: false,
-      meta: { _summarizationFailed: true, _summarizationError: errMsg },
-    };
-  }
-}
-
-/** Build the system prompt for content summarization */
-function buildSummarizationPrompt(originalWords: number, targetWords: number): string {
-  return `You are a content summarizer for a web scraping tool. 
-Summarize the following web page content, preserving:
-- ALL factual data (numbers, dates, names, prices, specifications)
-- Key arguments, conclusions, and findings
-- Structural organization (use headings, lists)
-- Any code snippets or technical details
-
-Do NOT:
-- Add opinions or analysis
-- Omit specific data points (numbers, names, URLs)
-- Change the meaning or emphasis of the content
-- Add any preamble like "Here is a summary" — just output the summary directly
-
-Original content word count: ${originalWords}
-Target summary: ~${targetWords} words`;
-}
-
-// ---------------------------------------------------------------------------
 // Combined Processing Pipeline
 // ---------------------------------------------------------------------------
 
@@ -673,8 +424,7 @@ export async function safeExecute(
 }
 
 /**
- * Process a successful response: truncate content if needed and
- * optionally summarize via Copilot SDK.
+ * Process a successful response: truncate content if needed.
  *
  * Replaces the old `asText()` function.
  */
@@ -682,47 +432,17 @@ export async function processResponse(
   data: unknown,
   options?: {
     url?: string;
-    getCopilotClientFn?: (token?: string) => Promise<any>;
-    copilotToken?: string;
-    /** Skip summarization (e.g. for JSON extraction, search results) */
+    /** Skip truncation (unused, kept for call-site compat) */
     skipSummarization?: boolean;
   },
 ): Promise<string> {
-  // Step 1: Try AI summarization on markdown content
-  if (!options?.skipSummarization && options?.getCopilotClientFn) {
-    const md = extractMarkdown(data);
-    const wc = md ? wordCount(md) : 0;
-    console.error(`[Summarization] Check: markdown=${md ? md.length : 0} chars, ${wc} words, threshold=${SUMMARIZE_AFTER_WORDS}`);
-    if (md && wc > SUMMARIZE_AFTER_WORDS && SUMMARIZE_AFTER_WORDS > 0) {
-      console.error(`[Summarization] Attempting summarization for ${options.url || 'unknown url'} (${wc} words)`);
-      const result = await summarizeIfNeeded(
-        md,
-        options.url || '',
-        options.getCopilotClientFn,
-        options.copilotToken,
-      );
-      if (result.summarized) {
-        // Replace the markdown in the data with the summary
-        const updated = injectMarkdown(data, result.markdown, result.meta || {});
-        return JSON.stringify(updated, null, 2);
-      }
-      // Summarization was attempted but failed — inject failure metadata and fall through to truncation
-      if (result.meta) {
-        console.error(`[Summarization] Failed, falling back to truncation. Meta:`, JSON.stringify(result.meta));
-      }
-    }
-  } else {
-    console.error(`[Summarization] Skipped: skipSummarization=${options?.skipSummarization}, hasCopilotFn=${!!options?.getCopilotClientFn}`);
-  }
-
-  // Step 2: Content truncation
   const { result, wasTruncated } = truncateContent(data);
   return JSON.stringify(result, null, 2);
 }
 
 /**
  * Simple `asText` replacement for backward compatibility.
- * Applies truncation but not summarization.
+ * Applies truncation only.
  */
 export function processResponseSync(data: unknown): string {
   const { result } = truncateContent(data);
@@ -730,54 +450,6 @@ export function processResponseSync(data: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers for extracting/injecting markdown from nested response objects
-// ---------------------------------------------------------------------------
-
-/** Extract markdown content from a scrape response, wherever it may be nested */
-function extractMarkdown(data: unknown): string | null {
-  if (!data || typeof data !== 'object') return null;
-  const obj = data as Record<string, unknown>;
-
-  // Direct: data.markdown
-  if (typeof obj.markdown === 'string') return obj.markdown;
-
-  // Nested: data.data.markdown
-  if (obj.data && typeof obj.data === 'object') {
-    const inner = obj.data as Record<string, unknown>;
-    if (typeof inner.markdown === 'string') return inner.markdown;
-  }
-
-  return null;
-}
-
-/** Replace the markdown field in a response and merge metadata */
-function injectMarkdown(
-  data: unknown,
-  newMarkdown: string,
-  meta: Record<string, unknown>,
-): unknown {
-  const serialized = JSON.stringify(data);
-  const cloned = JSON.parse(serialized);
-
-  if (typeof cloned.markdown === 'string') {
-    cloned.markdown = newMarkdown;
-    Object.assign(cloned.metadata || cloned, meta);
-    return cloned;
-  }
-
-  if (cloned.data && typeof cloned.data === 'object') {
-    if (typeof cloned.data.markdown === 'string') {
-      cloned.data.markdown = newMarkdown;
-      Object.assign(cloned.data.metadata || cloned.data, meta);
-      return cloned;
-    }
-  }
-
-  return cloned;
-}
-
-// ---------------------------------------------------------------------------
 // Exports for testing
 // ---------------------------------------------------------------------------
-export { MAX_CONTENT_CHARS, SUMMARIZE_AFTER_WORDS, SUMMARIZE_MODEL };
-export { summaryCache, summarizationTimestamps };
+export { MAX_CONTENT_CHARS };

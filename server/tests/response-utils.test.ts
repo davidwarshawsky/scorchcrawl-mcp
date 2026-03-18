@@ -1,5 +1,5 @@
 /**
- * Tests for response-utils.ts — Error Mapping, Content Truncation, AI Summarization
+ * Tests for response-utils.ts — Error Mapping, Content Truncation
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
@@ -9,10 +9,6 @@ import {
   safeExecute,
   processResponse,
   processResponseSync,
-  wordCount,
-  summarizeIfNeeded,
-  summaryCache,
-  summarizationTimestamps,
   type MappedError,
 } from '../src/response-utils.js';
 
@@ -267,90 +263,6 @@ describe('processResponseSync', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Feature 3: AI Summarization
-// ---------------------------------------------------------------------------
-
-describe('wordCount', () => {
-  it('counts words correctly', () => {
-    expect(wordCount('Hello world')).toBe(2);
-    expect(wordCount('  spaced   out  ')).toBe(2);
-    expect(wordCount('')).toBe(0);
-    expect(wordCount('one')).toBe(1);
-  });
-});
-
-describe('summarizeIfNeeded', () => {
-  beforeEach(() => {
-    summaryCache.clear();
-    summarizationTimestamps.length = 0;
-  });
-
-  it('returns content unchanged if under word threshold', async () => {
-    const markdown = 'Short content that does not need summarization.';
-    const result = await summarizeIfNeeded(markdown, 'https://example.com');
-    expect(result.summarized).toBe(false);
-    expect(result.markdown).toBe(markdown);
-  });
-
-  it('returns content unchanged when no getCopilotClientFn provided', async () => {
-    const markdown = 'word '.repeat(6000); // way over threshold
-    const result = await summarizeIfNeeded(markdown, 'https://example.com');
-    expect(result.summarized).toBe(false);
-  });
-
-  it('returns cached summary on cache hit', async () => {
-    const markdown = 'word '.repeat(6000);
-    const url = 'https://example.com/test';
-
-    // Manually populate cache
-    const { createHash } = await import('node:crypto');
-    const fingerprint = url + markdown.slice(0, 1000);
-    const key = createHash('sha256').update(fingerprint).digest('hex');
-    summaryCache.set(key, {
-      summary: 'Cached summary content',
-      timestamp: Date.now(),
-      wordCount: 3,
-    });
-
-    const result = await summarizeIfNeeded(
-      markdown,
-      url,
-      async () => ({}), // dummy client
-    );
-    expect(result.summarized).toBe(true);
-    expect(result.markdown).toBe('Cached summary content');
-    expect(result.meta?._cachedResult).toBe(true);
-  });
-
-  it('falls back gracefully when Copilot client call fails', async () => {
-    const markdown = 'word '.repeat(6000);
-    const mockGetClient = async () => ({
-      createSession: async () => {
-        throw new Error('Copilot API unavailable');
-      },
-    });
-
-    const result = await summarizeIfNeeded(
-      markdown,
-      'https://example.com',
-      mockGetClient,
-    );
-    expect(result.summarized).toBe(false);
-    expect(result.meta?._summarizationFailed).toBe(true);
-  });
-
-  it('falls back when null client returned', async () => {
-    const markdown = 'word '.repeat(6000);
-    const result = await summarizeIfNeeded(
-      markdown,
-      'https://example.com',
-      async () => null,
-    );
-    expect(result.summarized).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Combined Pipeline: safeExecute
 // ---------------------------------------------------------------------------
 
@@ -421,13 +333,12 @@ describe('processResponse', () => {
     expect(result).toContain('Content truncated');
   });
 
-  it('skips summarization when flag is set', async () => {
+  it('skips summarization options gracefully', async () => {
     const data = { success: true, data: { markdown: 'word '.repeat(6000) } };
-    const mockGetClient = vi.fn();
     const result = await processResponse(data, {
       skipSummarization: true,
-      getCopilotClientFn: mockGetClient,
     });
-    expect(mockGetClient).not.toHaveBeenCalled();
+    const parsed = JSON.parse(result);
+    expect(parsed.success).toBe(true);
   });
 });
