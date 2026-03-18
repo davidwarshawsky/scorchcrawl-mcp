@@ -1,13 +1,14 @@
 {
   "name": "scorchcrawl-mcp",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Open-source Copilot SDK-compliant MCP server for web scraping with stealth bot-detection bypass.",
   "type": "module",
   "bin": {
     "scorchcrawl-mcp": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "scripts"
   ],
   "publishConfig": {
     "access": "public"
@@ -24,7 +25,8 @@
     "lint": "eslint src/**/*.ts",
     "lint:fix": "eslint src/**/*.ts --fix",
     "format": "prettier --write .",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "postinstall": "node scripts/patch-copilot-sdk.cjs"
   },
   "license": "AGPL-3.0",
   "dependencies": {
